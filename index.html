@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dota 2 Winrate Vault</title>
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+</head>
+
+<body>
+<header>
+  <div class="topbar">
+    <div class="brand">
+      <div class="crest" aria-hidden="true"></div>
+      <div>
+        <h1>Dota 2 Winrate Vault</h1>
+        <p>
+          All-time cumulative winrate (Y) displayed only for the selected time window (X). Each match is a point; same-day matches are spaced by sequence index.
+          Data from <a href="https://www.opendota.com/" target="_blank" rel="noreferrer">OpenDota</a>. Note: single-request fetch is capped by OpenDota (no pagination).
+        </p>
+      </div>
+    </div>
+    <div class="badge" title="Theme: dark + gold">
+      <span class="dot"></span>
+      Luxury Dark · Gold
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="grid">
+    <!-- LEFT: CONFIG -->
+    <div class="card">
+      <div class="cardInner">
+        <div class="cardTitle">
+          <h2>Configuration</h2>
+          <div class="sub">Multi-player · Overlay compare · Party mode · Heatmap</div>
+        </div>
+
+        <form id="controls">
+          <!-- Legacy inputs (hidden), kept for compatibility -->
+          <div class="row" style="display:none;">
+            <div>
+              <label for="account1">Account ID (Player 1)</label>
+              <input id="account1" placeholder="e.g. 123456789" inputmode="numeric" />
+            </div>
+            <div>
+              <label for="account2">Account ID (Player 2)</label>
+              <input id="account2" placeholder="e.g. 987654321" inputmode="numeric" />
+            </div>
+          </div>
+
+          <!-- Dynamic players list -->
+          <div class="playersWrap" id="playersWrap">
+            <div class="playersHead">
+              <div class="txt">
+                Players (32-bit <strong>account_id</strong>). Add as many as you want.
+                <div style="margin-top:6px;color:rgba(185,173,146,.85);font-size:12px;">
+                  Tip: party mode works on any chosen pair.
+                </div>
+              </div>
+              <button class="miniBtn" type="button" id="addPlayerBtn">Add Player</button>
+            </div>
+            <div class="playersList" id="playersList"></div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label for="preset">Preset range</label>
+              <select id="preset">
+                <option value="custom">Custom</option>
+                <option value="7d">Last 7 days</option>
+                <option value="30d" selected>Last 30 days</option>
+                <option value="90d">Last 90 days</option>
+                <option value="ytd">Year to date</option>
+                <option value="prev_month">Previous month</option>
+              </select>
+            </div>
+            <div>
+              <label for="rankedOnly">Match type filter</label>
+              <select id="rankedOnly">
+                <option value="ranked" selected>Ranked only (lobby_type = 7)</option>
+                <option value="all">All matches</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label for="fromDate">From</label>
+              <input id="fromDate" type="date" />
+            </div>
+            <div>
+              <label for="toDate">To</label>
+              <input id="toDate" type="date" />
+            </div>
+          </div>
+
+          <div class="partyRow">
+            <div>
+              <label for="partyA">Party mode: Player A</label>
+              <select id="partyA"></select>
+            </div>
+            <div>
+              <label for="partyB">Party mode: Player B</label>
+              <select id="partyB"></select>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:10px;">
+            <div>
+              <label>&nbsp;</label>
+              <button id="runBtn" type="submit">Fetch &amp; Render Dashboard</button>
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <div class="pillRow">
+                <div class="pill">X axis: <strong>Match sequence</strong></div>
+                <div class="pill">Y axis: <strong>All-time WR</strong></div>
+                <div class="pill">Y zoom: <strong>Auto</strong></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="hint">
+            <ul>
+              <li>OpenDota is rate-limited. Very large histories may hit HTTP 429.</li>
+              <li>If this file fails when opened directly, serve it locally (example: <code>python -m http.server</code>).</li>
+              <li>No pagination: OpenDota may not return your full history in one request (cap varies). Charts are correct for whatever was returned.</li>
+            </ul>
+          </div>
+
+          <div id="status" class="status">Ready.</div>
+        </form>
+      </div>
+    </div>
+
+    <!-- RIGHT: SUMMARY -->
+    <div class="card">
+      <div class="cardInner">
+        <div class="cardTitle">
+          <h2>Executive Summary</h2>
+          <div class="sub">Profiles · KPIs · Range vs all-time</div>
+        </div>
+
+        <div class="summaryWrap">
+          <div class="kpiGrid">
+            <div class="kpi">
+              <div class="k">Selected window</div>
+              <div class="v" id="k_window">—</div>
+              <div class="s" id="k_window_sub">—</div>
+            </div>
+            <div class="kpi">
+              <div class="k">Combined matches in window</div>
+              <div class="v" id="k_combined_matches">—</div>
+              <div class="s" id="k_combined_sub">—</div>
+            </div>
+            <div class="kpi">
+              <div class="k">Party matches in window (A+B)</div>
+              <div class="v" id="k_party_matches">—</div>
+              <div class="s" id="k_party_sub">—</div>
+            </div>
+          </div>
+
+          <div class="hr"></div>
+
+          <div class="playerCards" id="playerCards">
+            <!-- filled by JS -->
+          </div>
+
+          <div class="heatWrap">
+            <div class="cardTitle" style="margin-top:6px;">
+              <h2>Activity Heatmap</h2>
+              <div class="sub">GitHub-style dots (size = matches/day)</div>
+            </div>
+
+            <div class="heatLegend">
+              <div>Combined activity (all players)</div>
+              <div class="scale">
+                <span style="color:var(--muted2);">Less</span>
+                <span class="heatDot" style="transform:scale(.55); background: rgba(255,255,255,.05);"></span>
+                <span class="heatDot" style="transform:scale(.75); background: rgba(215,181,109,.12); border-color: rgba(215,181,109,.20);"></span>
+                <span class="heatDot" style="transform:scale(.95); background: rgba(215,181,109,.20); border-color: rgba(215,181,109,.26);"></span>
+                <span class="heatDot" style="transform:scale(1.15); background: rgba(242,210,139,.26); border-color: rgba(242,210,139,.32);"></span>
+                <span style="color:var(--muted2);">More</span>
+              </div>
+            </div>
+
+            <div class="heatGrid" id="heatGrid"></div>
+            <div class="heatTip" id="heatTip">Hover dots to see date + matches. (In-range only.)</div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHARTS -->
+  <div class="charts" id="charts">
+    <div class="card">
+      <div class="cardInner">
+        <div class="cardTitle">
+          <h2>Overlay Compare</h2>
+          <div class="sub">All players · Same y-scale · Per-match x spacing</div>
+        </div>
+        <canvas class="chartCanvas" id="chartOverlay"></canvas>
+        <div class="chartMetaRow">
+          <div id="overlayMeta">—</div>
+          <div>Tip: hover any point for match detail</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="cardInner">
+        <div class="cardTitle">
+          <h2>Party Together</h2>
+          <div class="sub">Selected A+B · Shared match_id · All-time party WR windowed</div>
+        </div>
+        <canvas class="chartCanvas" id="chartParty"></canvas>
+        <div class="chartMetaRow">
+          <div id="partyMeta">—</div>
+          <div>Only matches where both players appear in the same match_id</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="perPlayerCharts"></div>
+  </div>
+</main>
+
+<!-- App script -->
+<script src="script.js"></script>
+</body>
+</html>
