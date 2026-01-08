@@ -147,7 +147,7 @@
       <div class="cardInner">
         <div class="cardTitle">
           <h2>Executive Summary</h2>
-          <div class="sub">Profiles · KPIs · Range vs all-time</div>
+          <div class="sub">Profiles · KPIs · Range vs all-time · Hero usage</div>
         </div>
 
         <div class="summaryWrap">
@@ -175,28 +175,8 @@
             <!-- filled by JS -->
           </div>
 
-          <div class="heatWrap">
-            <div class="cardTitle" style="margin-top:6px;">
-              <h2>Activity Heatmap</h2>
-              <div class="sub">GitHub-style dots (size = matches/day)</div>
-            </div>
-
-            <div class="heatLegend">
-              <div>Combined activity (all players)</div>
-              <div class="scale">
-                <span style="color:var(--muted2);">Less</span>
-                <span class="heatDot" style="transform:scale(.55); background: rgba(255,255,255,.05);"></span>
-                <span class="heatDot" style="transform:scale(.75); background: rgba(215,181,109,.12); border-color: rgba(215,181,109,.20);"></span>
-                <span class="heatDot" style="transform:scale(.95); background: rgba(215,181,109,.20); border-color: rgba(215,181,109,.26);"></span>
-                <span class="heatDot" style="transform:scale(1.15); background: rgba(242,210,139,.26); border-color: rgba(242,210,139,.32);"></span>
-                <span style="color:var(--muted2);">More</span>
-              </div>
-            </div>
-
-            <div class="heatGrid" id="heatGrid"></div>
-            <div class="heatTip" id="heatTip">Hover dots to see date + matches. (In-range only.)</div>
-          </div>
-
+          <!-- Per-player heatmaps injected here -->
+          <div id="heatSection"></div>
         </div>
       </div>
     </div>

@@ -255,7 +255,7 @@ function pct(n, d, digits = 2) {
   return ((n / d) * 100).toFixed(digits) + "%";
 }
 
-// --- Party (any pair) ---
+// --- Party (any pair), ALL-TIME cumulative WR ---
 function buildPartySharedAllTime(pAType, pBType) {
   const mapB = new Map(pBType.map(m => [m.match_id, m]));
   const shared = [];
@@ -272,7 +272,7 @@ function buildPartySharedAllTime(pAType, pBType) {
     if (winA) wins++;
 
     const played = idx + 1;
-    const wr = (wins / played) * 100;
+    const wr = (wins / played) * 100; // ALL-TIME cumulative party WR at that point
 
     const combined = {
       match_id: s.match_id,
@@ -378,13 +378,16 @@ function syncPartySelectors(playerMetaList) {
   }
 }
 
-// --- Heatmap ---
-function buildDailyCounts(matchesInRange) {
-  const map = new Map(); // YYYY-MM-DD -> count
+// --- Heatmap (per player: size = games, color red/green = WR) ---
+function buildDailyStats(matchesInRange) {
+  const map = new Map(); // YYYY-MM-DD -> {count,wins}
   for (const m of matchesInRange) {
     if (typeof m.start_time !== "number") continue;
     const d = luxon.DateTime.fromSeconds(m.start_time).toISODate();
-    map.set(d, (map.get(d) || 0) + 1);
+    const entry = map.get(d) || { count: 0, wins: 0 };
+    entry.count++;
+    if (isWinForPlayer(m)) entry.wins++;
+    map.set(d, entry);
   }
   return map;
 }
@@ -401,16 +404,26 @@ function datesBetween(fromIso, toIsoInclusive) {
   return out;
 }
 
-function renderHeatmap(container, fromIso, toIso, countMap) {
-  container.innerHTML = "";
+function colorFromWinrate(winrate) {
+  // 0 -> red, 1 -> green; hsl(0..120,70,45)
+  const w = Math.max(0, Math.min(1, winrate));
+  const h = 0 + w * 120;
+  return `hsl(${h}, 70%, 45%)`;
+}
+
+function renderHeatmapForPlayer(grid, tipEl, fromIso, toIso, statsMap, playerName) {
+  grid.innerHTML = "";
 
   const days = datesBetween(fromIso, toIso);
-  if (days.length === 0) return;
+  if (days.length === 0) {
+    tipEl.textContent = `No matches in window for ${playerName}.`;
+    return;
+  }
 
   const first = days[0];
-  const firstWeekStart = first.minus({ days: (first.weekday - 1) });
+  const firstWeekStart = first.minus({ days: (first.weekday - 1) }); // Monday
   const last = days[days.length - 1];
-  const lastWeekEnd = last.plus({ days: (7 - last.weekday) });
+  const lastWeekEnd = last.plus({ days: (7 - last.weekday) }); // Sunday
   const all = [];
   let cur = firstWeekStart;
   while (cur <= lastWeekEnd) {
@@ -418,23 +431,18 @@ function renderHeatmap(container, fromIso, toIso, countMap) {
     cur = cur.plus({ days: 1 });
   }
 
-  let max = 0;
+  let maxCount = 0;
   for (const d of days) {
     const k = d.toISODate();
-    max = Math.max(max, countMap.get(k) || 0);
+    const st = statsMap.get(k);
+    if (!st) continue;
+    maxCount = Math.max(maxCount, st.count);
   }
 
-  const scale = (c) => {
-    if (!c || max === 0) return { s: .55, bg: "rgba(255,255,255,.05)", bd: "rgba(255,255,255,.08)" };
-    const t = c / max;
-    const s = 0.65 + t * 0.70;
-    const alpha = 0.10 + t * 0.22;
-    const border = 0.18 + t * 0.20;
-    return {
-      s,
-      bg: `rgba(215,181,109,${alpha.toFixed(3)})`,
-      bd: `rgba(242,210,139,${border.toFixed(3)})`
-    };
+  const scale = (count) => {
+    if (!count || maxCount === 0) return 0.55;
+    const t = count / maxCount;
+    return 0.65 + t * 0.70;
   };
 
   const weeks = [];
@@ -452,31 +460,92 @@ function renderHeatmap(container, fromIso, toIso, countMap) {
 
       const iso = d.toISODate();
       const isInRange = (d >= days[0] && d <= days[days.length - 1]);
-      const c = isInRange ? (countMap.get(iso) || 0) : 0;
-      const st = scale(c);
-
-      dot.style.transform = `scale(${st.s.toFixed(3)})`;
-      dot.style.background = st.bg;
-      dot.style.borderColor = st.bd;
+      const stats = isInRange ? (statsMap.get(iso) || { count: 0, wins: 0 }) : { count: 0, wins: 0 };
+      const { count, wins } = stats;
+      const wr = count ? wins / count : 0;
+      const size = scale(count);
 
       if (!isInRange) {
         dot.style.opacity = "0.20";
         dot.style.transform = "scale(.45)";
+      } else if (!count) {
+        dot.style.transform = "scale(.55)";
+        dot.style.background = "rgba(255,255,255,.05)";
+        dot.style.borderColor = "rgba(255,255,255,.08)";
       } else {
-        dot.title = `${iso}: ${c} match${c === 1 ? "" : "es"}`;
+        dot.style.transform = `scale(${size.toFixed(3)})`;
+        dot.style.background = colorFromWinrate(wr);
+        dot.style.borderColor = "rgba(0,0,0,.35)";
+      }
+
+      if (isInRange) {
+        const pctStr = count ? (wr * 100).toFixed(1) + "%" : "—";
+        dot.title = `${iso}: ${count} match${count === 1 ? "" : "es"} (${wins}W/${count - wins}L, ${pctStr})`;
       }
 
       col.appendChild(dot);
     });
 
-    container.appendChild(col);
+    grid.appendChild(col);
   });
 
-  const tip = $("heatTip");
-  if (tip) {
-    const total = Array.from(countMap.values()).reduce((a, b) => a + b, 0);
-    tip.textContent = `Hover dots to see date + matches. Total in window: ${total}. (Size scales per-window.)`;
-  }
+  const total = Array.from(statsMap.values()).reduce((a, b) => a + b.count, 0);
+  tipEl.textContent = `Total in window: ${total} matches for ${playerName}. Size = volume, color: red → green by daily winrate.`;
+}
+
+function renderHeatmapsForPlayers(fetched, fromIso, toIso) {
+  const section = $("heatSection");
+  section.innerHTML = "";
+  if (!fetched.length) return;
+
+  fetched.forEach((p, i) => {
+    const wrap = document.createElement("div");
+    wrap.className = "heatWrap";
+
+    const head = document.createElement("div");
+    head.className = "heatHeader";
+
+    const left = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "heatHeaderTitle";
+    title.textContent = `Activity Heatmap — P${i + 1} · ${p.profile.personaname}`;
+    const sub = document.createElement("div");
+    sub.className = "heatHeaderSub";
+    sub.textContent = "Dot size = games on that day, color: red → green by daily winrate.";
+    left.appendChild(title);
+    left.appendChild(sub);
+
+    head.appendChild(left);
+
+    const legend = document.createElement("div");
+    legend.className = "heatLegend";
+    legend.innerHTML = `
+      <div>Window-only, filtered by match type.</div>
+      <div class="scale">
+        <span style="color:var(--muted2);">Loss-heavy</span>
+        <span class="heatDot" style="transform:scale(.65); background:hsl(0,70%,45%); border-color:rgba(0,0,0,.35);"></span>
+        <span class="heatDot" style="transform:scale(.85); background:hsl(60,70%,45%); border-color:rgba(0,0,0,.35);"></span>
+        <span class="heatDot" style="transform:scale(1.05); background:hsl(120,70%,45%); border-color:rgba(0,0,0,.35);"></span>
+        <span style="color:var(--muted2);">Win-heavy</span>
+      </div>
+    `;
+
+    const grid = document.createElement("div");
+    grid.className = "heatGrid";
+
+    const tip = document.createElement("div");
+    tip.className = "heatTip";
+
+    wrap.appendChild(head);
+    wrap.appendChild(legend);
+    wrap.appendChild(grid);
+    wrap.appendChild(tip);
+
+    section.appendChild(wrap);
+
+    const statsMap = buildDailyStats(p.matchesInRange);
+    renderHeatmapForPlayer(grid, tip, fromIso, toIso, statsMap, p.profile.personaname);
+  });
 }
 
 // --- Chart helpers ---
@@ -604,19 +673,41 @@ function destroyChart(id) {
   if (c) { c.destroy(); charts.delete(id); }
 }
 
+// --- Hero stats (recent heroes) ---
+function computeHeroStats(matches) {
+  const map = new Map(); // hero_id -> {count,lastTime}
+  for (const m of matches) {
+    if (typeof m.hero_id !== "number" || typeof m.start_time !== "number") continue;
+    const entry = map.get(m.hero_id) || { count: 0, lastTime: 0 };
+    entry.count++;
+    if (m.start_time > entry.lastTime) entry.lastTime = m.start_time;
+    map.set(m.hero_id, entry);
+  }
+  const arr = Array.from(map.entries()).map(([heroId, data]) => ({
+    heroId,
+    count: data.count,
+    lastTime: data.lastTime
+  }));
+  arr.sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return b.lastTime - a.lastTime;
+  });
+  return arr;
+}
+
 // --- Summary rendering ---
-function renderSummary({ fromIso, toIso, filterLabel, fetched, partyStats }) {
+function renderSummary({ fromIso, toIso, filterLabel, fetched, partyStats, heroMap }) {
   $("k_window").textContent = `${fromIso} → ${toIso}`;
-  $("k_window_sub").textContent = `Filter: ${filterLabel} • Players: ${fetched.length}`;
+  $("k_window_sub").textContent = `Filter: ${filterLabel} · Players: ${fetched.length}`;
 
   const combinedMatches = fetched.reduce((acc, p) => acc + p.matchesInRangeCount, 0);
   const combinedWins = fetched.reduce((acc, p) => acc + p.winsInRange, 0);
   $("k_combined_matches").textContent = combinedMatches.toString();
-  $("k_combined_sub").textContent = `Range winrate (sum): ${pct(combinedWins, combinedMatches)} • Total wins (sum): ${combinedWins}`;
+  $("k_combined_sub").textContent = `Range winrate (sum): ${pct(combinedWins, combinedMatches)} · Total wins (sum): ${combinedWins}`;
 
   $("k_party_matches").textContent = partyStats?.matchesInRange?.toString() ?? "—";
   $("k_party_sub").textContent = partyStats
-    ? `Range party WR: ${pct(partyStats.winsInRange, partyStats.matchesInRange)} • All-time party: ${pct(partyStats.winsAllTime, partyStats.matchesAllTime)}`
+    ? `Range party WR: ${pct(partyStats.winsInRange, partyStats.matchesInRange)} · All-time party: ${pct(partyStats.winsAllTime, partyStats.matchesAllTime)}`
     : "Select two players for party mode.";
 
   const wrap = $("playerCards");
@@ -686,14 +777,110 @@ function renderSummary({ fromIso, toIso, filterLabel, fetched, partyStats }) {
     meta.appendChild(linkRow);
     meta.appendChild(stats);
 
+    // Hero usage summary (all-time, filtered)
+    const heroStats = computeHeroStats(p.filteredType);
+    if (heroStats.length) {
+      const heroWrap = document.createElement("div");
+      heroWrap.className = "heroSummary";
+
+      const title = document.createElement("div");
+      title.className = "heroSummaryTitle";
+      title.textContent = "Recent heroes (history)";
+
+      const list = document.createElement("div");
+      list.className = "heroSummaryList";
+
+      heroStats.slice(0, 7).forEach(h => {
+        const chip = document.createElement("div");
+        chip.className = "heroChip";
+        const nameHero = heroMap?.get(h.heroId) || `Hero #${h.heroId}`;
+        const last = new Date(h.lastTime * 1000).toLocaleDateString();
+        chip.textContent = `${nameHero} · ${h.count} games · last: ${last}`;
+        list.appendChild(chip);
+      });
+
+      heroWrap.appendChild(title);
+      heroWrap.appendChild(list);
+      meta.appendChild(heroWrap);
+    }
+
     card.appendChild(av);
     card.appendChild(meta);
     wrap.appendChild(card);
   });
 }
 
+// --- Match tables ---
+function setupMatchTable(player, idx, heroMap, card) {
+  const PAGE_SIZE = 20;
+  const matches = [...player.filteredType].filter(m => typeof m.start_time === "number")
+    .sort((a, b) => b.start_time - a.start_time);
+
+  let page = 1;
+  const total = matches.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const tbody = card.querySelector(`#table_${idx} tbody`);
+  const pagerInfo = card.querySelector(`#pager_${idx} .pagerInfo`);
+  const prevBtn = card.querySelector(`.tablePrev[data-player-index="${idx}"]`);
+  const nextBtn = card.querySelector(`.tableNext[data-player-index="${idx}"]`);
+
+  function renderPage() {
+    const start = (page - 1) * PAGE_SIZE;
+    const end = Math.min(start + PAGE_SIZE, total);
+    tbody.innerHTML = "";
+
+    matches.slice(start, end).forEach(m => {
+      const tr = document.createElement("tr");
+      const win = isWinForPlayer(m);
+      tr.className = win ? "row-win" : "row-loss";
+
+      const dt = new Date(m.start_time * 1000);
+      const dateStr = dt.toLocaleDateString();
+      const timeStr = dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const hero = heroMap?.get(m.hero_id) || `Hero #${m.hero_id}`;
+      const kda = `${m.kills ?? "?"}/${m.deaths ?? "?"}/${m.assists ?? "?"}`;
+      const dur = m.duration ? Math.round(m.duration / 60) + "m" : "?";
+
+      tr.innerHTML = `
+        <td>${dateStr} ${timeStr}</td>
+        <td>${hero}</td>
+        <td>${win ? "WIN" : "LOSS"}</td>
+        <td>${kda}</td>
+        <td>${dur}</td>
+        <td>${m.match_id}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    pagerInfo.textContent = total
+      ? `Page ${page} / ${totalPages} · Showing ${start + 1}–${end} of ${total} matches`
+      : "No matches in history (with current filter).";
+
+    prevBtn.disabled = (page <= 1);
+    nextBtn.disabled = (page >= totalPages);
+  }
+
+  prevBtn.addEventListener("click", () => {
+    if (page > 1) {
+      page--;
+      renderPage();
+    }
+  });
+
+  nextBtn.addEventListener("click", () => {
+    if (page < totalPages) {
+      page++;
+      renderPage();
+    }
+  });
+
+  renderPage();
+}
+
 // --- Charts rendering ---
 function renderCharts({ fetched, heroMap, partyData, filterLabel }) {
+  // Overlay all players
   const overlayDatasets = fetched.map((p, i) => {
     const color = PALETTE[i % PALETTE.length];
     return datasetForPlayer(`P${i + 1} · ${escapeHtml(p.profile.personaname)}`, p.pointsInRange, color);
@@ -714,8 +901,9 @@ function renderCharts({ fetched, heroMap, partyData, filterLabel }) {
   charts.set("chartOverlay", overlayChart);
 
   $("overlayMeta").textContent =
-    `Players: ${fetched.length} • Window matches (sum): ${fetched.reduce((a,p)=>a+p.matchesInRangeCount,0)} • ${filterLabel}`;
+    `Players: ${fetched.length} · Window matches (sum): ${fetched.reduce((a,p)=>a+p.matchesInRangeCount,0)} · ${filterLabel}`;
 
+  // Party chart (ALL-TIME cumulative WR, sliced to window)
   destroyChart("chartParty");
   const partyPts = partyData?.pointsInRange || [];
   const partyDayLabels = partyData?.dayLabelByX || new Map();
@@ -738,6 +926,7 @@ function renderCharts({ fetched, heroMap, partyData, filterLabel }) {
 
   $("partyMeta").textContent = partyData?.metaText || "Select two distinct players for party mode.";
 
+  // Per-player charts + tables
   const perWrap = $("perPlayerCharts");
   perWrap.innerHTML = "";
   destroyChartsByPrefix("chartPlayer_");
@@ -760,6 +949,32 @@ function renderCharts({ fetched, heroMap, partyData, filterLabel }) {
           <div>Range: ${p.winsInRange}/${p.matchesInRangeCount} (${pct(p.winsInRange,p.matchesInRangeCount)}) · All-time: ${pct(p.allTime.winsAllTime,p.allTime.totalAllTime)}</div>
           <div>Rank: ${rankTierToText(p.profile.rank_tier)}</div>
         </div>
+
+        <div class="tableWrap">
+          <div class="tableHead">
+            <div class="tableHeadTitle">Recent matches</div>
+            <div class="tableControls">
+              <button type="button" class="miniBtn tablePrev" data-player-index="${i}">Prev</button>
+              <button type="button" class="miniBtn tableNext" data-player-index="${i}">Next</button>
+            </div>
+          </div>
+          <table class="table" id="table_${i}">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Hero</th>
+                <th>Result</th>
+                <th>KDA</th>
+                <th>Dur</th>
+                <th>Match</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="pager" id="pager_${i}">
+            <span class="pagerInfo"></span>
+          </div>
+        </div>
       </div>
     `;
     perWrap.appendChild(card);
@@ -771,6 +986,8 @@ function renderCharts({ fetched, heroMap, partyData, filterLabel }) {
     });
     attachTooltipCallbacks(chart, heroMap, "player");
     charts.set(`chartPlayer_${i}`, chart);
+
+    setupMatchTable(p, i, heroMap, card);
   });
 }
 
@@ -859,7 +1076,7 @@ $("controls").addEventListener("submit", async (e) => {
         playerId: pid,
         profile,
         raw,
-        filteredType,
+        filteredType, // full history (per filter) used for all-time + hero stats + tables
         allTime,
         pointsInRange: remap.points,
         dayLabelByX: remap.dayLabelByX,
@@ -882,7 +1099,10 @@ $("controls").addEventListener("submit", async (e) => {
       const B = fetched.find(x => x.playerId === partyB);
 
       if (A && B) {
+        // ALL-TIME cumulative party WR across their shared filtered matches
         const partyAllTime = buildPartySharedAllTime(A.filteredType, B.filteredType);
+
+        // Slice the all-time curve to the selected window (but Y is still all-time WR)
         const partyInRangeRaw = slicePointsByRange(partyAllTime.points, fromEpoch, toEpochExclusive);
         const partyRemap = remapToSequentialX(partyInRangeRaw);
 
@@ -901,23 +1121,25 @@ $("controls").addEventListener("submit", async (e) => {
         partyData = {
           pointsInRange: partyRemap.points,
           dayLabelByX: partyRemap.dayLabelByX,
-          metaText: `A: ${Aname} • B: ${Bname} • Range shared: ${partyStats.matchesInRange} • Range WR: ${pct(partyStats.winsInRange, partyStats.matchesInRange)}`
+          metaText: `A: ${Aname} · B: ${Bname} · Range shared: ${partyStats.matchesInRange} · Range WR: ${pct(partyStats.winsInRange, partyStats.matchesInRange)}`
         };
       }
     }
 
-    const combinedMatchesInRange = fetched.flatMap(p => p.matchesInRange);
-    const combinedCountMap = buildDailyCounts(combinedMatchesInRange);
-    renderHeatmap($("heatGrid"), fromIso, toIso, combinedCountMap);
+    // Per-player heatmaps (window-only, per player)
+    renderHeatmapsForPlayers(fetched, fromIso, toIso);
 
+    // Summary
     renderSummary({
       fromIso,
       toIso,
       filterLabel,
       fetched,
-      partyStats
+      partyStats,
+      heroMap
     });
 
+    // Charts
     renderCharts({
       fetched,
       heroMap,
@@ -932,6 +1154,7 @@ $("controls").addEventListener("submit", async (e) => {
       `Filter: ${filterLabel}\n` +
       `X-axis: per-match sequence (same-day games are spaced)\n` +
       `Y-axis: all-time cumulative winrate (auto-zoom within window)\n` +
+      `Party chart: all-time cumulative party WR, sliced to window.\n` +
       `Note: no pagination; OpenDota may cap returned history per player.`,
       "ok"
     );
